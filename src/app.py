@@ -1,0 +1,208 @@
+import src.core.env as env
+import src.core.supabase as supabase
+
+import os
+import random
+
+from zoneinfo import ZoneInfo  # WIB - Asia/Jakarta
+
+from telegram import Update, InputFile
+from telegram.error import BadRequest
+from telegram.ext import (
+    ContextTypes,
+    Application,
+    CommandHandler,  # /start /report
+    MessageHandler,  # text atau suara (voice note)
+    Defaults,
+    filters,
+)
+
+from telegram.constants import ParseMode  # MarkdownV2
+from loguru import logger
+from datetime import time, date, timedelta  # generate - per 1 minggu / 7 hari
+
+from src.agents.lead import LeadAgent
+from src.repository.chat_repository import ChatRepository
+from src.core.format import to_telegram_markdown
+from src.core.artifacts import Artifact
+
+
+timezone = ZoneInfo("Asia/Jakarta")
+
+chat_repository = ChatRepository()
+
+# python-telegram-bot config
+bot_config = Defaults(parse_mode=ParseMode.MARKDOWN_V2, tzinfo=timezone)
+
+supabase_client = supabase.get_supabase_client()
+
+
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    user_id = update.message.from_user.id
+    username = update.message.from_user.username
+    chat_id = update.effective_chat.id
+
+    chat_repository.save_user(user_id=user_id, username=username, chat_id=chat_id)
+
+    safe_text = to_telegram_markdown(
+        f"Halo!, Selamat datang {username} di Mentor Bahasa Inggris Virtual.\n"
+        "Aku siap bantu kamu untuk belajar bahasa inggris! \n"
+        "Kamu bisa langsung coba ketik pesan seperti ini: \n"
+        "*buatkan soal reading*\n"
+        "*periksa: I goes to school*\n"
+        "*kasih tips belajar*\n"
+        "atau ngobrol bebas untuk melatih *speaking atau writing* kamu!\n"
+        "Ketik /start untuk mendaftarkan akun dan mulai belajar\n"
+        "Ketik /report untuk membuat laporan belajar\n",
+    )
+
+    await update.message.reply_text(safe_text)
+
+
+async def report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        to_telegram_markdown("laporan sedang kami buat, mohon tunggu...")
+    )
+
+    user_id = update.message.from_user.id
+    username = update.message.from_user.username
+
+    lead_agent = LeadAgent(user_id=user_id)
+
+    end_date = date.today()
+    start_date = end_date - timedelta(days=7)
+
+    report_file_path = lead_agent.handle_report(
+        username=username, start_date=start_date, end_date=end_date
+    )
+
+    # ambil download laporan belajar dari supabase storage
+    result_download = supabase_client.storage.from_("artifacts").download(report_file_path)
+
+    report_file_pdf = InputFile(result_download, filename="Laporan-belajar.pdf")
+
+    await update.message.reply_document(
+        document=report_file_pdf,
+        caption=to_telegram_markdown(
+            f"Laporan belajar bahasa inggris dari tanggal {start_date.isoformat()} - {end_date.isoformat()}"
+        ),
+    )
+        
+async def _send_artifact(update: Update, artifact: Artifact):
+    artifact_path = artifact.get("path")
+    kind = artifact.get("kind")
+    caption = artifact.get("caption")
+
+    safe_caption_text = to_telegram_markdown(caption)
+
+    result_download = supabase_client.storage.from_("artifacts").download(artifact_path)
+
+    artifact_file = InputFile(result_download, filename=artifact_path)
+
+    if kind == "audio":
+        await update.message.reply_audio(
+            audio=artifact_file, caption=safe_caption_text
+        )
+    else:
+        await update.message.reply_document(
+            document=artifact_file, caption=safe_caption_text
+        )
+
+
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    reply_text = await update.message.reply_text(
+        to_telegram_markdown("mentor sedang menyiapkan jawaban...")
+    )
+
+    user_id = update.message.from_user.id
+    user_message = update.message.text
+
+    lead_agent = LeadAgent(user_id=user_id)
+
+    response = lead_agent.handle_send_message(
+        message_text=user_message
+    )
+
+    safe_text = to_telegram_markdown(response["text"])
+
+    await reply_text.edit_text(safe_text)
+
+    if response["artifacts"]:
+        # artifact_data = response["artifacts"].data[0].artifact
+        logger.debug(f"artifacts: {response["artifacts"][0]}")
+        artifact = Artifact(response["artifacts"][0])
+        await _send_artifact(update, artifact)
+
+
+async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    reply_text = await update.message.reply_text(
+        to_telegram_markdown("suara sedang kami proses, mohon tunggu...")
+    )
+
+    user_id = update.message.from_user.id
+
+    lead_agent = LeadAgent(user_id=user_id)
+
+    # download file audio dari telegram
+    env.TEMP.mkdir(parents=True, exist_ok=True)
+    voice_file = await context.bot.get_file(update.message.voice.file_id)
+    voice_file_path = env.TEMP / f"{update.message.voice.file_id}.ogg"
+    await voice_file.download_to_drive(str(voice_file_path))
+
+    evaluation_speaking_result = lead_agent.handle_send_voice(
+       voice_file_path=voice_file_path
+    )
+
+    safe_text = to_telegram_markdown(evaluation_speaking_result)
+
+    await reply_text.edit_text(safe_text)
+
+    os.remove(str(voice_file_path))
+
+
+async def task_reminder(context: ContextTypes.DEFAULT_TYPE):
+    logger.info("[app.py][task_reminder]")
+    users = chat_repository.get_users()
+    skill_types = ["reading", "writing", "listening", "speaking"]
+
+    for user in users.data:
+        user_id = user["user_id"]
+        message = f"Pagi! ☀️ Yuk, luangkan 5 menit untuk latihan {random.choice(skill_types)} hari ini."
+        chat_repository.save_message(
+            user_id=user_id, role="model", message_text=message
+        )
+        safe_text = to_telegram_markdown(message)
+        await context.bot.send_message(chat_id=user_id, text=safe_text)
+
+
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.error(f"Error: {context.error}")
+
+    if update.effective_message:
+        await update.effective_message.reply_text(f"Terjadi error: {context.error}")
+
+
+def run():
+    app = (
+        Application.builder().token(env.TELEGRAM_BOT_TOKEN).defaults(bot_config).build()
+    )
+
+    # register route handler
+    app.add_handler(CommandHandler("start", start_command))
+    app.add_handler(CommandHandler("report", report_command))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    app.add_handler(MessageHandler(filters.VOICE, handle_voice))
+
+    # scheduler
+    target_time = time(hour=10, minute=3, second=0, tzinfo=timezone)
+    app.job_queue.run_daily(
+        callback=task_reminder, time=target_time, name="task_reminder"
+    )
+    # app.job_queue.run_repeating(callback=task_reminder, interval=5, first=0)
+
+    app.add_error_handler(error_handler)
+
+    print("Mentor Bahasa Inggris Virtual berhasil di jalankan...")
+    app.run_polling(allowed_updates=Update.ALL_TYPES, timeout=30)
