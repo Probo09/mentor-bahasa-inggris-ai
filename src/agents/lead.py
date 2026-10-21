@@ -74,7 +74,7 @@ class LeadAgent:
         )
 
         response_token_count = self.gemini_client.models.count_tokens(
-            model=env.GEMMINI_MODEL, contents=message_text
+            model=env.GEMINI_MODEL, contents=message_text
         )
 
         logger.debug(f"total tokens: {response_token_count.total_tokens}")
