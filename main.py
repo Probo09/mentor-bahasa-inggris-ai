@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 import src.core.env as env
 import src.core.supabase as supabase
 import src.app as app_telegram_bot
@@ -100,19 +99,3 @@ async def telegram_webhook(request: Request):
     except Exception as e:
         logger.error(f"Error processing data telegram: {e}")
         return Response(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
-=======
-title = "Belajar Python Agentic AI"
-
-year = 2026
-
-in_progress = True
-
-
-print(title)
-
-print(year)
-
-print(in_progress)
-
-print(f"Selamat datang dikelas {title}")
->>>>>>> b01087e507f6a4d3cffa1d7106e1b3011cfa081f
