@@ -5,6 +5,7 @@ import os
 import random
 import traceback # Pastikan meng-import ini di bagian atas file
 import logging
+import re
 
 from zoneinfo import ZoneInfo  # WIB - Asia/Jakarta
 
@@ -136,7 +137,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         logger.info("Berhasil mendapatkan balasan dari AI!")
 
-        safe_text = to_telegram_markdown(response["text"])
+        # 1. Ambil teks murni dari AI
+        raw_text = response["text"]
+
+        # 2. Sapu bersih semua karakter spesial MarkdownV2 agar tidak crash
+        safe_text = re.sub(r'([_*\[\]()~`>#+\-=|{}.!])', r'\\\1', raw_text)
+
+        # 3. Tampilkan pesan ke Telegram
         await reply_text.edit_text(safe_text)
 
         if response.get("artifacts") and len(response["artifacts"]) > 0:
