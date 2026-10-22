@@ -3,6 +3,8 @@ import src.core.supabase as supabase
 
 import os
 import random
+import traceback # Pastikan meng-import ini di bagian atas file
+import logging
 
 from zoneinfo import ZoneInfo  # WIB - Asia/Jakarta
 
@@ -36,6 +38,7 @@ bot_config = Defaults(parse_mode=ParseMode.MARKDOWN_V2, tzinfo=timezone)
 
 supabase_client = supabase.get_supabase_client()
 
+logger = logging.getLogger(__name__)
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
@@ -111,7 +114,6 @@ async def _send_artifact(update: Update, artifact: Artifact):
 
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
     reply_text = await update.message.reply_text(
         to_telegram_markdown("mentor sedang menyiapkan jawaban...")
     )
@@ -119,21 +121,36 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     user_message = update.message.text
 
-    lead_agent = LeadAgent(user_id=user_id)
+    try:
+        logger.info(f"Mulai memproses pesan dari {user_id}: {user_message}")
+        
+        lead_agent = LeadAgent(user_id=user_id)
 
-    response = lead_agent.handle_send_message(
-        message_text=user_message
-    )
+        # CATATAN PENTING: Jika fungsi di bawah ini adalah 'async def', 
+        # kamu WAJIB menambahkan kata 'await' di depannya seperti ini:
+        # response = await lead_agent.handle_send_message(message_text=user_message)
+        # Jika bukan async, biarkan seperti di bawah:
+        response = lead_agent.handle_send_message(
+            message_text=user_message
+        )
 
-    safe_text = to_telegram_markdown(response["text"])
+        logger.info("Berhasil mendapatkan balasan dari AI!")
 
-    await reply_text.edit_text(safe_text)
+        safe_text = to_telegram_markdown(response["text"])
+        await reply_text.edit_text(safe_text)
 
-    if response["artifacts"]:
-        # artifact_data = response["artifacts"].data[0].artifact
-        logger.debug(f"artifacts: {response["artifacts"][0]}")
-        artifact = Artifact(response["artifacts"][0])
-        await _send_artifact(update, artifact)
+        if response.get("artifacts") and len(response["artifacts"]) > 0:
+            logger.debug(f"artifacts: {response['artifacts'][0]}")
+            artifact = Artifact(response["artifacts"][0])
+            await _send_artifact(update, artifact)
+
+    except Exception as e:
+        # Ini adalah jaring pengamannya!
+        error_detail = traceback.format_exc()
+        logger.error(f"GAGAL MEMPROSES AI: {e}\n{error_detail}")
+        
+        # Beritahu user kalau ada yang salah
+        await reply_text.edit_text("Maaf, mentor sedang mengalami gangguan teknis. Coba lagi nanti ya.")
 
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
